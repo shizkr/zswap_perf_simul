@@ -35,32 +35,43 @@ long get_time(void) {
 int main(int argc, char *argv[]) {
 	int m_cnt = 0;
 	float m_time = 0;
+	float mw_time = 0, mw_cnt = 0;
+	float mr_time = 0, mr_cnt = 0;
 	float ret;
 	bool flag = false;
 	int count = 0;
+	int init_write=30;
+	while(init_write--)
+		ram_wr(random()%RAM_SIZE);
 	while(++count < INPUT_SIZE) {
 		int addr = random()%INPUT_SIZE;
-		if(flag) {
-			ret = ram_rd(addr);
+		if(flag^=1) {
+			int read_cnt = 1000;
+			while(read_cnt-- && (ret=ram_rd(addr)) == -1)
+				addr = random()%INPUT_SIZE;
 			if(ret > 0) {
+				mr_time += ret;
+				mr_cnt++;
 				m_time += ret;
 				m_cnt++;
-			} else {
-				ret = ram_wr(addr);
-				m_time += ret;
-				m_cnt++;
-			}
+			} else
+				continue;
 		} else {
 			ret = ram_wr(addr);
+			mw_time += ret;
+			mw_cnt++;
 			m_time += ret;
 			m_cnt++;
 		}
 		if((m_cnt%100)==0) {
 			float avg = m_time/100.;
+			float w_avg = mw_time/mw_cnt;
+			float r_avg = 0;
+			if(mr_cnt > 0) r_avg = mr_time/mr_cnt;
 			m_time = 0;
-			cout << avg << endl;
+			mw_time = mw_cnt = mr_time = mr_cnt = 0;
+			cout << avg << '\t' << r_avg << '\t' << w_avg << endl;
 		}
-		flag ^= 1;
 	}
 }
 
@@ -71,8 +82,8 @@ vector<int> RAM_Q; // maintain cache for RAM size. addr.
 int ram_cache_size=(RAM_SIZE*(100-ZPOOL_RATE)/100);
 float ram_rd(int addr) {
 	float weight = 1. - (float)RAM_TBL.size()/(float)ram_cache_size;
-	if(weight > 0.4) weight = 1;
-	else weight += 0.3;
+	if(weight > 0.2) weight = 1;
+	else weight += 0.4;
 	float t = 0;
 	int depth = 0;
 	if(RAM_TBL.count(addr) > 0)
@@ -92,7 +103,12 @@ float ram_rd(int addr) {
 			RAM_Q.push_back(addr);
 			t += RAM_SPEED;
 			depth += 4;
-		} else {
+		} else if(isinzpool(addr)) {
+			// zpool eviction TBD
+			RAM_TBL[addr] = time;
+			RAM_Q.push_back(addr);
+			return weight*ZPOOL_SPEED;
+		}else {
 			RAM_TBL[addr] = time;
 			RAM_Q.push_back(addr);
 			t += RAM_SPEED;
@@ -113,8 +129,8 @@ int ram_eviction(void) {
 
 float ram_wr(int addr) {
 	float weight = 1. - (float)RAM_TBL.size()/(float)ram_cache_size;
-	if(weight > 0.4) weight = 1;
-	else weight += 0.3;
+	if(weight > 0.2) weight = 1;
+	else weight += 0.4;
 	float t = 0;
 	int depth = 0;
 	int time = get_time();
@@ -159,10 +175,16 @@ float zpool_rd(int addr, int &depth) {
 	return -1; // page fault
 }
 
+bool zpool_full_flag = false;
 float zpool_wr(int addr, int &depth) {
 	depth++;
 	if(ZPOOL_TBL.size() >= zpool_cache_size) {
+		if(!zpool_full_flag){
+			cout << "ZPOOL FULL" << endl;
+			zpool_full_flag = true;
+		}
 		// need next level function later to add zpool handler.
+		depth += 4;
 		return -1;
 	} else {
 		if(ZPOOL_TBL.count(addr)>0) {
